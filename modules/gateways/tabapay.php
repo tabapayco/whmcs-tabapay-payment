@@ -1,20 +1,46 @@
 <?php
 use WHMCS\Database\Capsule;
+require_once __DIR__ . '/../../init.php';
+require_once __DIR__ . '/../../includes/gatewayfunctions.php';
+require_once __DIR__ . '/../../includes/invoicefunctions.php';
+$gatewayParams = getGatewayVariables('tabapay');
 
+if (!empty($_SERVER['HTTP_AUTHORIZE']) && md5($gatewayParams['MerchantID']) == $_SERVER['HTTP_AUTHORIZE']) {
+	$responseData = $_POST;
+	if ($responseData['status'] == "success" && $responseData['responseCode'] == 1) {
+		$invoice = Capsule::table('tblinvoices')->where('notes', $responseData['token'])->where('status', 'Unpaid')->first();
+		checkCbTransID($responseData['trackingCode']);
+		logTransaction($gatewayParams['name'], $responseData, 'Success');
+		addInvoicePayment(
+			$invoice->id,
+			$responseData['trackingCode'],
+			$invoice->total,
+			0,
+			'tabapay'
+		);
+		echo (json_encode(['status' => 'success']));
+	}
+}
+		
 if ($_REQUEST['invoiceId'] || $_GET['token']) {
-	require_once __DIR__ . '/../../init.php';
-	require_once __DIR__ . '/../../includes/gatewayfunctions.php';
-	require_once __DIR__ . '/../../includes/invoicefunctions.php';
-	$gatewayParams = getGatewayVariables('tabapay');
-
 	if (!empty($_GET['status'])) {
-		$invoice = Capsule::table('tblinvoices')->where('notes', $_GET['token'])->where('status', 'Unpaid')->first();
+		
+		$invoice = Capsule::table('tblinvoices')->where('notes', $_REQUEST['token'])->where('status', 'Unpaid')->first();
 		if (!$invoice) {
 			die("Invoice not found");
 		}
-		if (!empty($_GET['status']) && $_GET['status'] == "success" && $_GET['responseCode'] == 1) {
+		
+		elseif (!empty($_GET['status']) && $_GET['status'] == "success" && $_GET['responseCode'] == 1) {
 	//            $amount = ceil($invoice->total * ($gatewayParams['currencyType'] == 'IRT' ? 10 : 1));
-			$responseData = VerifyTransaction($_GET['token'], $_GET['amount'], $gatewayParams['MerchantID']);
+	
+			$maxAttempts = 3;
+			$attempt = 0;
+			$responseData = null;
+			
+			while ($attempt < $maxAttempts && (empty($responseData['status']))) {
+				$responseData = VerifyTransaction($_GET['token'], $_GET['amount'], $gatewayParams['MerchantID']);
+				$attempt++;
+			}
 
 			if ($responseData['status'] == "success" && $responseData['responseCode'] == 1) {
 				checkCbTransID($responseData['trackingCode']);
